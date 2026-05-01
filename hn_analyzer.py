@@ -2,9 +2,16 @@ import requests
 import json
 from datetime import datetime
 import csv
+import re
+import html
 import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
+from nltk.corpus import stopwords
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
 nltk.download('vader_lexicon', quiet=True)
+nltk.download('stopwords', quiet=True)
+nltk.download('punkt_tab', quiet=True)
 
 # Keywords to track (customize these for your product category)
 KEYWORDS = {
@@ -15,6 +22,60 @@ KEYWORDS = {
     'bugs': ['bug', 'broken', 'error', 'crash', 'issue', 'problem', 'glitch'],
     'performance': ['fast', 'slow', 'performance', 'speed', 'lag', 'responsive']
 }
+
+def preprocess_comment(text):
+    """Strip HTML, tokenize, remove stopwords and short tokens"""
+    text = html.unescape(text)                     # decode &#x27; → ' etc.
+    text = re.sub(r'<[^>]+>', ' ', text)          # strip HTML tags
+    text = re.sub(r'[^a-zA-Z\s]', '', text)       # keep only letters
+    tokens = nltk.word_tokenize(text.lower())
+    stop_words = set(stopwords.words('english'))
+    return [t for t in tokens if t not in stop_words and len(t) >= 3]
+
+def analyze_topics(comments_list, num_topics=3):
+    """Extract latent topics from comments using LDA"""
+
+    # Phase 2: Build corpus
+    preprocessed = [' '.join(preprocess_comment(c['comment'])) for c in comments_list]
+
+    vectorizer = CountVectorizer(
+        min_df=2,        # token must appear in at least 2 documents
+        max_df=0.8,      # ignore tokens in more than 80% of docs
+        max_features=500
+    )
+    doc_term_matrix = vectorizer.fit_transform(preprocessed)
+    vocab = vectorizer.get_feature_names_out()
+
+    # Phase 3: Train LDA
+    lda = LatentDirichletAllocation(
+        n_components=num_topics,
+        max_iter=10,
+        learning_method='batch',
+        random_state=42
+    )
+    doc_topic_matrix = lda.fit_transform(doc_term_matrix)
+    # doc_topic_matrix shape: (n_comments, num_topics) — each row sums to 1.0
+
+    # Phase 4: Extract top words and dominant topic per comment
+    top_words_per_topic = []
+    for topic_weights in lda.components_:
+        top_indices = topic_weights.argsort()[-10:][::-1]
+        top_words_per_topic.append([vocab[i] for i in top_indices])
+
+    dominant_topics = doc_topic_matrix.argmax(axis=1)
+    topic_counts = [0] * num_topics
+    for t in dominant_topics:
+        topic_counts[t] += 1
+
+    # Display
+    total = len(comments_list)
+    print("\n" + "=" * 50)
+    print("🧠 TOPIC MODELING (LDA)")
+    print("=" * 50)
+    for i, words in enumerate(top_words_per_topic):
+        pct = (topic_counts[i] / total) * 100
+        print(f"\n  Topic {i + 1}  ({topic_counts[i]} comments, {pct:.1f}%)")
+        print(f"  Top words: {', '.join(words)}")
 
 def analyze_keywords(comments_list):
     """Count how many comments mention each keyword category"""
@@ -101,11 +162,12 @@ if response.status_code == 200:
         created_at = hit.get('created_at', 'N/A')
         story_title = hit.get('story_title', 'N/A')
         
+        clean_text = re.sub(r'<[^>]+>', ' ', html.unescape(comment_text))
         comments_data.append({
             'author': author,
             'date': created_at,
             'story': story_title,
-            'comment': comment_text[:300]  # First 300 characters
+            'comment': clean_text[:300]
         })
         
         # Print preview
@@ -113,7 +175,7 @@ if response.status_code == 200:
             print(f"\n--- Comment {i+1} ---")
             print(f"Author: {author}")
             print(f"Story: {story_title}")
-            print(f"Comment: {comment_text[:150]}...")
+            print(f"Comment: {re.sub(r'<[^>]+>', ' ', html.unescape(comment_text[:150]))}...")
     
     filename = f'hn_{search_term.replace(" ", "_")}_comments.csv'
 
@@ -166,7 +228,9 @@ if response.status_code == 200:
     print(f"  \"{most_positive['comment'][:120]}...\"")
     print(f"\nMost negative (score: {most_negative['sentiment_score']}):")
     print(f"  \"{most_negative['comment'][:120]}...\"")
-    
+
+    analyze_topics(comments_data)
+
 else:
     print(f"✗ Error: Status code {response.status_code}")
 
