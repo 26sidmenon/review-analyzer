@@ -7,7 +7,7 @@ import html
 import nltk
 from nltk.sentiment import SentimentIntensityAnalyzer
 from nltk.corpus import stopwords
-from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
 nltk.download('vader_lexicon', quiet=True)
 nltk.download('stopwords', quiet=True)
@@ -76,6 +76,28 @@ def analyze_topics(comments_list, num_topics=3):
         pct = (topic_counts[i] / total) * 100
         print(f"\n  Topic {i + 1}  ({topic_counts[i]} comments, {pct:.1f}%)")
         print(f"  Top words: {', '.join(words)}")
+
+def extract_key_terms(comments_list, search_term, top_n=10):
+    """Identify the most distinctive terms in this result set using TF-IDF"""
+    preprocessed = [' '.join(preprocess_comment(c['comment'])) for c in comments_list]
+
+    vectorizer = TfidfVectorizer(min_df=2, max_df=0.8)
+    tfidf_matrix = vectorizer.fit_transform(preprocessed)
+    vocab = vectorizer.get_feature_names_out()
+
+    mean_scores = tfidf_matrix.mean(axis=0).A1  # collapse to 1-D array of per-term means
+    scored = sorted(zip(vocab, mean_scores), key=lambda x: x[1], reverse=True)
+
+    # Drop any variant of the search term so it doesn't crowd out real signal
+    stop_terms = {t.lower() for t in search_term.split()}
+    top_terms = [(term, score) for term, score in scored if term not in stop_terms][:top_n]
+
+    print("\n" + "=" * 50)
+    print("🔑 TF-IDF KEY TERMS")
+    print("=" * 50)
+    print(f"\n  Most distinctive terms in these comments:\n")
+    for rank, (term, score) in enumerate(top_terms, 1):
+        print(f"  {rank:>2}. {term:<20} {score:.3f}")
 
 def analyze_keywords(comments_list):
     """Count how many comments mention each keyword category"""
@@ -230,6 +252,7 @@ if response.status_code == 200:
     print(f"  \"{most_negative['comment'][:120]}...\"")
 
     analyze_topics(comments_data)
+    extract_key_terms(comments_data, search_term)
 
 else:
     print(f"✗ Error: Status code {response.status_code}")
