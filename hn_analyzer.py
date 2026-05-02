@@ -9,6 +9,9 @@ from nltk.sentiment import SentimentIntensityAnalyzer
 from nltk.corpus import stopwords
 from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
+import numpy as np
 nltk.download('vader_lexicon', quiet=True)
 nltk.download('stopwords', quiet=True)
 nltk.download('punkt_tab', quiet=True)
@@ -77,6 +80,8 @@ def analyze_topics(comments_list, num_topics=3):
         print(f"\n  Topic {i + 1}  ({topic_counts[i]} comments, {pct:.1f}%)")
         print(f"  Top words: {', '.join(words)}")
 
+    return topic_counts, top_words_per_topic
+
 def extract_key_terms(comments_list, search_term, top_n=10):
     """Identify the most distinctive terms in this result set using TF-IDF"""
     preprocessed = [' '.join(preprocess_comment(c['comment'])) for c in comments_list]
@@ -98,6 +103,77 @@ def extract_key_terms(comments_list, search_term, top_n=10):
     print(f"\n  Most distinctive terms in these comments:\n")
     for rank, (term, score) in enumerate(top_terms, 1):
         print(f"  {rank:>2}. {term:<20} {score:.3f}")
+
+    return top_terms
+
+def generate_visualizations(sentiment_counts, keyword_counts,
+                            topic_counts, top_words_per_topic, top_terms, search_term):
+    """Save a 2x2 PNG of all four analysis charts"""
+    plt.style.use('seaborn-v0_8-whitegrid')
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig.suptitle(f"HN Analysis: {search_term}", fontsize=16, fontweight='bold', y=1.01)
+
+    # Chart 1 — Sentiment pie (top-left)
+    ax1 = axes[0, 0]
+    labels = ['Positive', 'Neutral', 'Negative']
+    sizes  = [sentiment_counts['positive'], sentiment_counts['neutral'], sentiment_counts['negative']]
+    colors = ['#4CAF50', '#9E9E9E', '#F44336']
+    non_zero = [(l, s, c) for l, s, c in zip(labels, sizes, colors) if s > 0]
+    ax1.pie(
+        [s for _, s, _ in non_zero],
+        labels=[l for l, _, _ in non_zero],
+        colors=[c for _, _, c in non_zero],
+        autopct='%1.1f%%', startangle=90, textprops={'fontsize': 10}
+    )
+    ax1.set_title('Sentiment Distribution', fontweight='bold')
+
+    # Chart 2 — Topic distribution bar (top-right)
+    ax2 = axes[0, 1]
+    topic_labels = [f"Topic {i + 1}\n({', '.join(words[:3])}...)"
+                    for i, words in enumerate(top_words_per_topic)]
+    bar_colors = ['#5C6BC0', '#42A5F5', '#26C6DA']
+    bars = ax2.bar(topic_labels, topic_counts, color=bar_colors[:len(topic_counts)], width=0.5)
+    for bar, count in zip(bars, topic_counts):
+        ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.1,
+                 str(count), ha='center', va='bottom', fontsize=10)
+    ax2.set_ylabel('Comments')
+    ax2.set_title('Topic Distribution', fontweight='bold')
+    ax2.set_ylim(0, max(topic_counts) + 2)
+
+    # Chart 3 — TF-IDF horizontal bar (bottom-left)
+    ax3 = axes[1, 0]
+    terms  = [t for t, _ in top_terms][::-1]   # reverse so rank 1 is at top
+    scores = [s for _, s in top_terms][::-1]
+    cmap   = cm.Blues(np.linspace(0.4, 0.9, len(terms)))
+    ax3.barh(terms, scores, color=cmap)
+    ax3.set_xlabel('Mean TF-IDF Score')
+    ax3.set_title('TF-IDF Key Terms', fontweight='bold')
+
+    # Chart 4 — Keyword categories bar (bottom-right)
+    ax4 = axes[1, 1]
+    sorted_kw = sorted(
+        [(cat, cnt) for cat, cnt in keyword_counts.items() if cnt > 0],
+        key=lambda x: x[1], reverse=True
+    )
+    if sorted_kw:
+        kw_labels = [cat.replace('_', '\n') for cat, _ in sorted_kw]
+        kw_counts = [cnt for _, cnt in sorted_kw]
+        kw_bars = ax4.bar(kw_labels, kw_counts, color='#FF7043', width=0.5)
+        for bar, count in zip(kw_bars, kw_counts):
+            ax4.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.05,
+                     str(count), ha='center', va='bottom', fontsize=10)
+        ax4.set_ylabel('Mentions')
+        ax4.set_ylim(0, max(kw_counts) + 2)
+    else:
+        ax4.text(0.5, 0.5, 'No keyword matches', ha='center', va='center',
+                 transform=ax4.transAxes, fontsize=12, color='grey')
+    ax4.set_title('Keyword Categories', fontweight='bold')
+
+    plt.tight_layout()
+    filename = f'hn_{search_term.replace(" ", "_")}_analysis.png'
+    plt.savefig(filename, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"\n✓ Saved visualization to {filename}")
 
 def analyze_keywords(comments_list):
     """Count how many comments mention each keyword category"""
@@ -251,8 +327,10 @@ if response.status_code == 200:
     print(f"\nMost negative (score: {most_negative['sentiment_score']}):")
     print(f"  \"{most_negative['comment'][:120]}...\"")
 
-    analyze_topics(comments_data)
-    extract_key_terms(comments_data, search_term)
+    topic_counts, top_words_per_topic = analyze_topics(comments_data)
+    top_terms = extract_key_terms(comments_data, search_term)
+    generate_visualizations(sentiment_counts, keyword_counts,
+                            topic_counts, top_words_per_topic, top_terms, search_term)
 
 else:
     print(f"✗ Error: Status code {response.status_code}")
